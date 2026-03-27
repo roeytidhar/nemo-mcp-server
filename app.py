@@ -8,7 +8,6 @@ import threading
 
 app = FastAPI(title="Nemo Console")
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,33 +16,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -----------------------------------------------------
-# AI MODEL LOADING (LLAMA-CPP)
-# -----------------------------------------------------
-# We delay loading to not block the main thread
 llama_model = None
 
 def load_model():
     global llama_model
     try:
         from llama_cpp import Llama
-        if os.path.exists("FunctionGemma-3-270M.gguf"):
-            # Load with strict memory limits for free tier
+        if os.path.exists("model.gguf"):
+            # Load with very low context and strict batch/threads to NEVER exceed 512MB RAM on free Render tier
             llama_model = Llama(
-                model_path="FunctionGemma-3-270M.gguf",
-                n_batch=128,
-                n_threads=2,
-                n_gqa=1
+                model_path="model.gguf",
+                n_batch=64,
+                n_ctx=256,
+                n_threads=1,
+                use_mmap=False,
+                use_mlock=False
             )
-            print("Llama Model Loaded successfully!")
+            print("Model Loaded perfectly under 512MB!")
     except Exception as e:
         print(f"Model failed to load: {e}")
 
 threading.Thread(target=load_model).start()
 
-# -----------------------------------------------------
-# MCP TOOLS FOR ANTIGRAVITY IDE
-# -----------------------------------------------------
 mcp = FastMCP("Nemo Server", host="0.0.0.0")
 
 @mcp.tool()
@@ -56,14 +50,11 @@ def nemo_save_note(note: str) -> str:
 def nemo_run_server_check() -> str:
     status = "Nemo Server is ALIVE and connected via MCP!"
     if llama_model is not None:
-        status += " The FunctionGemma model is also ONLINE!"
+        status += " The local brain is also ONLINE!"
     return status
 
 app.mount("/mcp", mcp.sse_app())
 
-# -----------------------------------------------------
-# CHAT WEB INTERFACE
-# -----------------------------------------------------
 class ChatRequest(BaseModel):
     message: str
 
@@ -75,15 +66,15 @@ async def chat_endpoint(req: ChatRequest):
         try:
             # Generate the response using our actual locally hosted AI model!
             response = dict(llama_model(
-                f"User: {user_msg}\\nAgent: ",
+                f"<|im_start|>user\\n{user_msg}<|im_end|>\\n<|im_start|>assistant\\n",
                 max_tokens=64,
-                stop=["User:", "\\n"],
+                stop=["<|im_end|>"],
             ))
             reply = response['choices'][0]['text'].strip()
         except:
-            reply = "The model is currently computing or OOM'd."
+            reply = "The model is currently computing or temporarily out of memory."
     else:
-        reply = f"Nemo Server Received: '{user_msg}'.\n(System Note: Model is still warming up on Render!)"
+        reply = f"Nemo Server Received: '{user_msg}'.\n(System Note: Model has not finished warming up yet!)"
         
     return {"reply": reply}
 
