@@ -7,10 +7,10 @@ import os
 
 app = FastAPI(title="Nemo Console")
 
-# Enable CORS so your Namecheap website can talk to this Render API!
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all domains, or you can restrict to ["https://vibecoderscommunity.com"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,11 +31,10 @@ def nemo_save_note(note: str) -> str:
 def nemo_run_server_check() -> str:
     return "Nemo Server is ALIVE and connected via MCP!"
 
-# Mount the MCP server
 app.mount("/mcp", mcp.sse_app())
 
 # -----------------------------------------------------
-# WEB INTERFACE (HTML UI)
+# CHAT WEB INTERFACE
 # -----------------------------------------------------
 class ChatRequest(BaseModel):
     message: str
@@ -43,8 +42,9 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     user_msg = req.message
-    # This acts as a proxy until you attach AI logic
-    reply = f"Nemo Server Received: '{user_msg}'.\n(System Note: Agent is alive on Render!)"
+    # Right now this is an echo to prove the frontend connects cleanly to Render.
+    # To upgrade this, we can easily plug in 'google-genai' and an API key!
+    reply = f"Nemo Server Received: '{user_msg}'.\n(System Note: Nemo is awaiting a Google Gemini API Key connection for full local AI logic!)"
     return {"reply": reply}
 
 @app.get("/")
@@ -58,13 +58,151 @@ async def serve_ui():
         <title>Nemo AI Interface</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-            body { background: linear-gradient(135deg, #0f172a, #1e293b); color: #f8fafc; font-family: 'Inter', sans-serif; align-items: center; justify-content: center; height: 100vh; margin: 0; display: flex; }
-            h1 { text-align: center; font-weight: 600; letter-spacing: 1px; }
+            body {
+                background: linear-gradient(135deg, #0f172a, #1e293b);
+                color: #f8fafc;
+                font-family: 'Inter', sans-serif;
+                height: 100vh;
+                margin: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
+            .chat-container {
+                width: 90%;
+                max-width: 600px;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 16px;
+                backdrop-filter: blur(10px);
+                box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                height: 70vh;
+            }
+            .header {
+                padding: 20px;
+                background: rgba(0,0,0,0.2);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                text-align: center;
+                font-weight: 600;
+                letter-spacing: 1px;
+            }
+            .messages {
+                flex: 1;
+                padding: 20px;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 15px;
+            }
+            .msg {
+                padding: 12px 18px;
+                border-radius: 12px;
+                max-width: 75%;
+                line-height: 1.5;
+            }
+            .msg.user {
+                background: #3b82f6;
+                align-self: flex-end;
+            }
+            .msg.nemo {
+                background: rgba(255, 255, 255, 0.1);
+                align-self: flex-start;
+            }
+            .input-area {
+                padding: 20px;
+                background: rgba(0,0,0,0.2);
+                display: flex;
+                gap: 10px;
+            }
+            input {
+                flex: 1;
+                padding: 15px;
+                border-radius: 8px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                background: rgba(0,0,0,0.3);
+                color: white;
+                font-size: 16px;
+                outline: none;
+            }
+            button {
+                padding: 0 25px;
+                border-radius: 8px;
+                border: none;
+                background: #3b82f6;
+                color: white;
+                font-weight: 600;
+                font-size: 16px;
+                cursor: pointer;
+                transition: 0.2s;
+            }
+            button:hover {
+                background: #2563eb;
+            }
+            .chat-loader {
+                align-self: flex-start;
+                font-size: 14px;
+                color: rgba(255, 255, 255, 0.5);
+                padding: 0 20px;
+                display: none;
+            }
         </style>
     </head>
     <body>
-        <h1>🟢 NEMO API OVER RENDER</h1>
-        <p>Your API is ready to accept cross-origin requests from Namecheap!</p>
+        <div class="chat-container">
+            <div class="header">🟢 NEMO CONSOLE (RENDER)</div>
+            <div class="messages" id="msgs">
+                <div class="msg nemo">Hello! I am Nemo, your Render-hosted agent server. I am online! Send a test message below:</div>
+            </div>
+            <div class="chat-loader" id="loader">Nemo is typing...</div>
+            <div class="input-area">
+                <input type="text" id="chatbox" placeholder="Send a message to the agent..." onkeypress="handleKey(event)">
+                <button onclick="send()">Send</button>
+            </div>
+        </div>
+
+        <script>
+            async function send() {
+                const box = document.getElementById('chatbox');
+                const text = box.value.trim();
+                const loader = document.getElementById('loader');
+                if(!text) return;
+                
+                addMsg(text, 'user');
+                box.value = '';
+                loader.style.display = 'block';
+
+                try {
+                    const res = await fetch('chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({message: text})
+                    });
+                    const data = await res.json();
+                    loader.style.display = 'none';
+                    addMsg(data.reply, 'nemo');
+                } catch(e) {
+                    loader.style.display = 'none';
+                    addMsg('Error reaching API. Check the Render logs!', 'nemo');
+                }
+            }
+
+            function addMsg(text, sender) {
+                const msgs = document.getElementById('msgs');
+                const div = document.createElement('div');
+                div.className = 'msg ' + sender;
+                div.innerText = text;
+                msgs.appendChild(div);
+                msgs.scrollTop = msgs.scrollHeight;
+            }
+
+            function handleKey(e) {
+                if(e.key === 'Enter') send();
+            }
+        </script>
     </body>
     </html>
     """
