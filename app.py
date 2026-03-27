@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 import os
+import threading
 
 app = FastAPI(title="Nemo Console")
 
@@ -15,6 +16,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# -----------------------------------------------------
+# AI MODEL LOADING (LLAMA-CPP)
+# -----------------------------------------------------
+# We delay loading to not block the main thread
+llama_model = None
+
+def load_model():
+    global llama_model
+    try:
+        from llama_cpp import Llama
+        if os.path.exists("FunctionGemma-3-270M.gguf"):
+            # Load with strict memory limits for free tier
+            llama_model = Llama(
+                model_path="FunctionGemma-3-270M.gguf",
+                n_batch=128,
+                n_threads=2,
+                n_gqa=1
+            )
+            print("Llama Model Loaded successfully!")
+    except Exception as e:
+        print(f"Model failed to load: {e}")
+
+threading.Thread(target=load_model).start()
 
 # -----------------------------------------------------
 # MCP TOOLS FOR ANTIGRAVITY IDE
@@ -29,7 +54,10 @@ def nemo_save_note(note: str) -> str:
 
 @mcp.tool()
 def nemo_run_server_check() -> str:
-    return "Nemo Server is ALIVE and connected via MCP!"
+    status = "Nemo Server is ALIVE and connected via MCP!"
+    if llama_model is not None:
+        status += " The FunctionGemma model is also ONLINE!"
+    return status
 
 app.mount("/mcp", mcp.sse_app())
 
@@ -42,171 +70,26 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     user_msg = req.message
-    # Right now this is an echo to prove the frontend connects cleanly to Render.
-    # To upgrade this, we can easily plug in 'google-genai' and an API key!
-    reply = f"Nemo Server Received: '{user_msg}'.\n(System Note: Nemo is awaiting a Google Gemini API Key connection for full local AI logic!)"
+    
+    if llama_model is not None:
+        try:
+            # Generate the response using our actual locally hosted AI model!
+            response = dict(llama_model(
+                f"User: {user_msg}\\nAgent: ",
+                max_tokens=64,
+                stop=["User:", "\\n"],
+            ))
+            reply = response['choices'][0]['text'].strip()
+        except:
+            reply = "The model is currently computing or OOM'd."
+    else:
+        reply = f"Nemo Server Received: '{user_msg}'.\n(System Note: Model is still warming up on Render!)"
+        
     return {"reply": reply}
 
 @app.get("/")
 async def serve_ui():
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nemo AI Interface</title>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-            body {
-                background: linear-gradient(135deg, #0f172a, #1e293b);
-                color: #f8fafc;
-                font-family: 'Inter', sans-serif;
-                height: 100vh;
-                margin: 0;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-            }
-            .chat-container {
-                width: 90%;
-                max-width: 600px;
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 16px;
-                backdrop-filter: blur(10px);
-                box-shadow: 0 4px 30px rgba(0,0,0,0.5);
-                overflow: hidden;
-                display: flex;
-                flex-direction: column;
-                height: 70vh;
-            }
-            .header {
-                padding: 20px;
-                background: rgba(0,0,0,0.2);
-                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-                text-align: center;
-                font-weight: 600;
-                letter-spacing: 1px;
-            }
-            .messages {
-                flex: 1;
-                padding: 20px;
-                overflow-y: auto;
-                display: flex;
-                flex-direction: column;
-                gap: 15px;
-            }
-            .msg {
-                padding: 12px 18px;
-                border-radius: 12px;
-                max-width: 75%;
-                line-height: 1.5;
-            }
-            .msg.user {
-                background: #3b82f6;
-                align-self: flex-end;
-            }
-            .msg.nemo {
-                background: rgba(255, 255, 255, 0.1);
-                align-self: flex-start;
-            }
-            .input-area {
-                padding: 20px;
-                background: rgba(0,0,0,0.2);
-                display: flex;
-                gap: 10px;
-            }
-            input {
-                flex: 1;
-                padding: 15px;
-                border-radius: 8px;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                background: rgba(0,0,0,0.3);
-                color: white;
-                font-size: 16px;
-                outline: none;
-            }
-            button {
-                padding: 0 25px;
-                border-radius: 8px;
-                border: none;
-                background: #3b82f6;
-                color: white;
-                font-weight: 600;
-                font-size: 16px;
-                cursor: pointer;
-                transition: 0.2s;
-            }
-            button:hover {
-                background: #2563eb;
-            }
-            .chat-loader {
-                align-self: flex-start;
-                font-size: 14px;
-                color: rgba(255, 255, 255, 0.5);
-                padding: 0 20px;
-                display: none;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="chat-container">
-            <div class="header">🟢 NEMO CONSOLE (RENDER)</div>
-            <div class="messages" id="msgs">
-                <div class="msg nemo">Hello! I am Nemo, your Render-hosted agent server. I am online! Send a test message below:</div>
-            </div>
-            <div class="chat-loader" id="loader">Nemo is typing...</div>
-            <div class="input-area">
-                <input type="text" id="chatbox" placeholder="Send a message to the agent..." onkeypress="handleKey(event)">
-                <button onclick="send()">Send</button>
-            </div>
-        </div>
-
-        <script>
-            async function send() {
-                const box = document.getElementById('chatbox');
-                const text = box.value.trim();
-                const loader = document.getElementById('loader');
-                if(!text) return;
-                
-                addMsg(text, 'user');
-                box.value = '';
-                loader.style.display = 'block';
-
-                try {
-                    const res = await fetch('chat', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({message: text})
-                    });
-                    const data = await res.json();
-                    loader.style.display = 'none';
-                    addMsg(data.reply, 'nemo');
-                } catch(e) {
-                    loader.style.display = 'none';
-                    addMsg('Error reaching API. Check the Render logs!', 'nemo');
-                }
-            }
-
-            function addMsg(text, sender) {
-                const msgs = document.getElementById('msgs');
-                const div = document.createElement('div');
-                div.className = 'msg ' + sender;
-                div.innerText = text;
-                msgs.appendChild(div);
-                msgs.scrollTop = msgs.scrollHeight;
-            }
-
-            function handleKey(e) {
-                if(e.key === 'Enter') send();
-            }
-        </script>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(content="<h1>API Base</h1>")
 
 if __name__ == "__main__":
     import uvicorn
