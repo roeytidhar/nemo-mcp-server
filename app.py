@@ -17,13 +17,22 @@ app.add_middleware(
 )
 
 llama_model = None
-startup_log = "Waiting for first chat request to boot brain (to prevent CPU starvation)...\n"
+startup_log = "Waiting for first chat request to boot brain...\n"
 is_booting = False
 
 def lazy_load_model():
     global llama_model, startup_log, is_booting
     is_booting = True
     try:
+        import urllib.request
+        
+        # If model doesn't exist, forcibly download the precise FunctionGemma Q4 model directly!
+        if not os.path.exists("model.gguf"):
+            startup_log += "model.gguf not found! Force downloading the Google FunctionGemma IT model to Render disk now...\n"
+            url = "https://huggingface.co/naver-ellm/functiongemma-270m-it-GGUF/resolve/main/functiongemma-270m-it-Q4_K_M.gguf"
+            urllib.request.urlretrieve(url, "model.gguf")
+            startup_log += "Download complete!\n"
+
         startup_log += "Attempting to import llama_cpp...\n"
         from llama_cpp import Llama
         
@@ -40,7 +49,7 @@ def lazy_load_model():
             )
             startup_log += "Model Loaded perfectly under 512MB!\n"
         else:
-            startup_log += "ERROR: model.gguf file does NOT exist on the filesystem!\n"
+            startup_log += "ERROR: model.gguf file STILL does NOT exist!\n"
     except Exception as e:
         startup_log += f"Model failed to load: {e}\n{traceback.format_exc()}\n"
     is_booting = False
@@ -64,17 +73,17 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
-    global is_booting, llama_model
+    global is_booting, llama_model, startup_log
     user_msg = req.message
     
     # Lazy load on first request to bypass Render's strict health check 60-second limit
-    if llama_model is None and not is_booting:
+    if llama_model is None and not is_booting and "ERROR" not in startup_log and "failed" not in startup_log.lower():
         import threading
         threading.Thread(target=lazy_load_model).start()
-        return {"reply": f"Nemo Server Received: '{user_msg}'.\n(System Note: Nemo has received power. His brain is now waking up for the first time. Give me 10 seconds to load and send another message!)"}
+        return {"reply": f"Nemo Server Received: '{user_msg}'.\n(System Note: Nemo has received power. He is now securely downloading your specific 350MB Google Agent Brain to the local Render processor. Give me 40 seconds to download and load it, then send another message!)"}
     
     if is_booting:
-        return {"reply": f"Nemo Server Received: '{user_msg}'.\n(System Note: Heavy AI Model is currently booting in background! Please wait a few seconds and try again!)"}
+        return {"reply": f"Nemo Server Received: '{user_msg}'.\n(System Note: Heavy AI Model is currently booting in background! Please wait 40 seconds and try again!)"}
         
     if llama_model is not None:
         try:
