@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 import os
 import threading
+import traceback
 
 app = FastAPI(title="Nemo Console")
 
@@ -17,13 +18,18 @@ app.add_middleware(
 )
 
 llama_model = None
+startup_log = "Initializing..."
 
 def load_model():
-    global llama_model
+    global llama_model, startup_log
     try:
+        startup_log = "Attempting to import llama_cpp...\n"
         from llama_cpp import Llama
+        
+        startup_log += "Checking if model.gguf exists...\n"
         if os.path.exists("model.gguf"):
             # Load with very low context and strict batch/threads to NEVER exceed 512MB RAM on free Render tier
+            startup_log += f"File found. Size: {os.path.getsize('model.gguf')} bytes. Loading Llama...\n"
             llama_model = Llama(
                 model_path="model.gguf",
                 n_batch=64,
@@ -32,9 +38,11 @@ def load_model():
                 use_mmap=False,
                 use_mlock=False
             )
-            print("Model Loaded perfectly under 512MB!")
+            startup_log += "Model Loaded perfectly under 512MB!\n"
+        else:
+            startup_log += "ERROR: model.gguf file does NOT exist on the filesystem!\n"
     except Exception as e:
-        print(f"Model failed to load: {e}")
+        startup_log += f"Model failed to load: {e}\n{traceback.format_exc()}\n"
 
 threading.Thread(target=load_model).start()
 
@@ -77,6 +85,10 @@ async def chat_endpoint(req: ChatRequest):
         reply = f"Nemo Server Received: '{user_msg}'.\n(System Note: Model has not finished warming up yet!)"
         
     return {"reply": reply}
+
+@app.get("/logs")
+async def get_logs():
+    return {"startup_log": startup_log}
 
 @app.get("/")
 async def serve_ui():
